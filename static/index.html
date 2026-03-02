@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MEP Vote Analyzer</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #0d0f14;
+  --surface:  #13161d;
+  --surface2: #191d27;
+  --border:   #1f2330;
+  --border2:  #262c3d;
+  --accent:   #e8c97e;
+  --accent2:  #5b8af0;
+  --red:      #e06b6b;
+  --green:    #6be09e;
+  --grey:     #7a8099;
+  --text:     #dde0ec;
+  --text-dim: #5a607a;
+  --adopted:  #6be09e;
+  --rejected: #e06b6b;
+  --lapsed:   #f0a05b;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  min-height: 100vh;
+  padding: 40px 20px 80px;
+}
+
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 60px 60px;
+  opacity: 0.25;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.container { max-width: 820px; margin: 0 auto; position: relative; z-index: 1; }
+
+/* ── Header ── */
+header { margin-bottom: 48px; }
+.eyebrow {
+  font-family: 'DM Mono', monospace; font-size: 11px;
+  letter-spacing: 3px; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 12px; display: block;
+}
+h1 {
+  font-family: 'DM Serif Display', serif;
+  font-size: clamp(30px, 6vw, 52px); line-height: 1.05;
+  margin-bottom: 14px;
+}
+h1 em { font-style: italic; color: var(--accent); }
+.subtitle { color: var(--grey); font-size: 15px; font-weight: 300; line-height: 1.6; max-width: 520px; }
+
+/* ── Form ── */
+.form-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 32px; margin-bottom: 32px;
+}
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+.field { display: flex; flex-direction: column; gap: 8px; }
+.field label {
+  font-family: 'DM Mono', monospace; font-size: 11px;
+  letter-spacing: 2px; text-transform: uppercase; color: var(--text-dim);
+}
+.field input {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text);
+  font-family: 'DM Sans', sans-serif; font-size: 15px;
+  padding: 12px 16px; outline: none;
+  transition: border-color .2s, box-shadow .2s;
+}
+.field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(232,201,126,.08); }
+.field input::placeholder { color: var(--text-dim); }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 10px;
+  background: var(--accent); color: #0d0f14;
+  font-family: 'DM Sans', sans-serif; font-size: 14px; font-weight: 500;
+  padding: 13px 28px; border: none; border-radius: 8px;
+  cursor: pointer; transition: transform .15s, opacity .15s;
+}
+.btn:hover { transform: translateY(-1px); opacity: .9; }
+.btn:active { transform: none; }
+.btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+.btn .spinner {
+  width: 14px; height: 14px;
+  border: 2px solid rgba(0,0,0,.3); border-top-color: #0d0f14;
+  border-radius: 50%; animation: spin .7s linear infinite; display: none;
+}
+.btn.loading .spinner { display: block; }
+.btn.loading .btn-text { opacity: .6; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.form-note { margin-top: 16px; font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+.form-note a { color: var(--accent); text-decoration: none; }
+
+/* ── Results ── */
+#results { animation: fadeUp .35s ease; }
+@keyframes fadeUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
+
+.result-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  margin-bottom: 24px; gap: 16px; flex-wrap: wrap;
+}
+.mep-name { font-family: 'DM Serif Display', serif; font-size: 28px; margin-bottom: 4px; }
+.result-meta { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--text-dim); }
+.badge {
+  background: rgba(232,201,126,.1); border: 1px solid rgba(232,201,126,.2);
+  color: var(--accent); font-family: 'DM Mono', monospace;
+  font-size: 12px; padding: 6px 14px; border-radius: 20px; white-space: nowrap;
+}
+
+/* Filter bar */
+.filter-bar {
+  display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap;
+}
+.filter-btn {
+  font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 1px;
+  padding: 6px 14px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border2); background: var(--surface);
+  color: var(--text-dim); transition: all .15s;
+}
+.filter-btn:hover { border-color: var(--grey); color: var(--text); }
+.filter-btn.active { background: var(--border2); color: var(--text); border-color: var(--grey); }
+.filter-btn.f-main.active  { border-color: var(--accent); color: var(--accent); }
+.filter-btn.f-for.active   { border-color: var(--green);  color: var(--green); }
+.filter-btn.f-against.active { border-color: var(--red);  color: var(--red); }
+.filter-btn.f-abs.active   { border-color: var(--grey);   color: var(--grey); }
+
+/* ── Bars ── */
+.bars-section {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 26px 30px; margin-bottom: 24px;
+}
+.bar-row {
+  display: grid; grid-template-columns: 130px 1fr 72px;
+  align-items: center; gap: 14px; margin-bottom: 18px;
+}
+.bar-row:last-child { margin-bottom: 0; }
+.bar-label { font-family: 'DM Mono', monospace; font-size: 12px; display: flex; align-items: center; gap: 8px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.bar-track { background: var(--bg); border-radius: 4px; height: 9px; overflow: hidden; }
+.bar-fill  { height: 100%; border-radius: 4px; transition: width 1s cubic-bezier(.4,0,.2,1); width: 0; }
+.bar-pct   { font-family: 'DM Mono', monospace; font-size: 14px; font-weight: 500; text-align: right; }
+.for-color     { background: var(--green); }
+.against-color { background: var(--red); }
+.abs-color     { background: var(--grey); }
+.dnv-color     { background: var(--border2); }
+
+/* ── Vote list ── */
+.vote-list { display: flex; flex-direction: column; gap: 8px; }
+
+.vote-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; overflow: hidden;
+  transition: border-color .2s;
+}
+.vote-card:hover { border-color: var(--border2); }
+.vote-card.is-main { border-left: 3px solid var(--accent); }
+
+/* Card header — always visible, click to expand */
+.vote-header {
+  display: grid;
+  grid-template-columns: 72px 1fr auto;
+  gap: 14px; align-items: start;
+  padding: 14px 18px;
+  cursor: pointer;
+  user-select: none;
+}
+.vote-date {
+  font-family: 'DM Mono', monospace; font-size: 11px;
+  color: var(--text-dim); padding-top: 2px; white-space: nowrap;
+}
+.vote-title-wrap { display: flex; flex-direction: column; gap: 5px; }
+.vote-title-text { font-size: 13px; line-height: 1.5; color: var(--text); }
+.vote-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+
+.chip {
+  font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: .5px;
+  padding: 2px 8px; border-radius: 4px; font-weight: 500;
+}
+.chip-main      { background: rgba(232,201,126,.12); color: var(--accent); }
+.chip-amend     { background: rgba(91,138,240,.12);  color: var(--accent2); }
+.chip-adopted   { background: rgba(107,224,158,.12); color: var(--adopted); }
+.chip-rejected  { background: rgba(224,107,107,.12); color: var(--rejected); }
+.chip-lapsed    { background: rgba(240,160,91,.12);  color: var(--lapsed); }
+.chip-type      { background: rgba(122,128,153,.12); color: var(--grey); }
+
+.vote-right { display: flex; align-items: center; gap: 10px; }
+
+.position-chip {
+  display: inline-flex; align-items: center;
+  font-family: 'DM Mono', monospace; font-size: 11px;
+  padding: 5px 11px; border-radius: 5px; font-weight: 500; white-space: nowrap;
+}
+.pos-for     { background: rgba(107,224,158,.12); color: var(--green); }
+.pos-against { background: rgba(224,107,107,.12); color: var(--red); }
+.pos-abs     { background: rgba(122,128,153,.12); color: var(--grey); }
+.pos-dnv     { background: rgba(31,35,48,.6);     color: var(--text-dim); }
+
+.expand-icon {
+  color: var(--text-dim); font-size: 12px;
+  transition: transform .25s; flex-shrink: 0;
+}
+.vote-card.open .expand-icon { transform: rotate(180deg); }
+
+/* Expanded detail panel */
+.vote-detail {
+  display: none;
+  border-top: 1px solid var(--border);
+  padding: 18px 18px 18px 18px;
+  background: var(--surface2);
+}
+.vote-card.open .vote-detail { display: block; }
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px 24px;
+  margin-bottom: 16px;
+}
+.detail-item { display: flex; flex-direction: column; gap: 4px; }
+.detail-label {
+  font-family: 'DM Mono', monospace; font-size: 10px;
+  letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-dim);
+}
+.detail-value { font-size: 13px; color: var(--text); line-height: 1.5; word-break: break-word; }
+.detail-value a { color: var(--accent2); text-decoration: none; }
+.detail-value a:hover { text-decoration: underline; }
+
+/* Parliament totals mini-bar */
+.parliament-totals { margin-top: 14px; }
+.pt-label {
+  font-family: 'DM Mono', monospace; font-size: 10px;
+  letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--text-dim); margin-bottom: 10px;
+}
+.pt-bars { display: flex; flex-direction: column; gap: 7px; }
+.pt-row { display: grid; grid-template-columns: 70px 1fr 55px; align-items: center; gap: 10px; }
+.pt-lbl { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text-dim); }
+.pt-track { background: var(--bg); border-radius: 3px; height: 6px; overflow: hidden; }
+.pt-fill { height: 100%; border-radius: 3px; }
+.pt-val { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text-dim); text-align: right; }
+
+/* State boxes */
+.state-box {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 40px; text-align: center;
+}
+.state-box .icon { font-size: 32px; margin-bottom: 14px; }
+.state-box h3 { font-family: 'DM Serif Display', serif; font-size: 20px; margin-bottom: 8px; }
+.state-box p { color: var(--grey); font-size: 14px; line-height: 1.6; }
+.error-box { border-color: rgba(224,107,107,.3); }
+.error-box h3 { color: var(--red); }
+
+.warning {
+  background: rgba(91,138,240,.07); border: 1px solid rgba(91,138,240,.2);
+  border-radius: 8px; padding: 12px 16px;
+  font-size: 13px; color: var(--accent2); margin-bottom: 18px; line-height: 1.6;
+}
+
+/* Count summary below filter bar */
+.count-summary {
+  font-family: 'DM Mono', monospace; font-size: 11px;
+  color: var(--text-dim); margin-bottom: 12px;
+}
+
+@media (max-width: 580px) {
+  .form-row { grid-template-columns: 1fr; }
+  .bar-row { grid-template-columns: 90px 1fr 56px; }
+  .vote-header { grid-template-columns: 58px 1fr auto; gap: 10px; }
+  .detail-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <span class="eyebrow">European Parliament</span>
+  <h1>MEP Vote<br><em>Analyzer</em></h1>
+  <p class="subtitle">Enter an MEP name and topic to see their full voting record — with details on every roll-call vote.</p>
+</header>
+
+<div class="form-card">
+  <div class="form-row">
+    <div class="field">
+      <label>MEP Name</label>
+      <input type="text" id="mepInput" placeholder="e.g. Manfred Weber" />
+    </div>
+    <div class="field">
+      <label>Topic / Keyword</label>
+      <input type="text" id="topicInput" placeholder="e.g. Ukraine, climate, AI" />
+    </div>
+  </div>
+  <button class="btn" id="searchBtn" onclick="runSearch()">
+    <div class="spinner"></div>
+    <span class="btn-text">Analyze Votes</span>
+  </button>
+  <p class="form-note">
+    Data: <strong>HowTheyVote.eu</strong> · EP terms 9 &amp; 10 (2019–present) · roll-call votes only ·
+    <a href="#" onclick="refreshData(event)">↻ refresh dataset</a>
+  </p>
+</div>
+
+<div id="results"></div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+let allVotes = [];
+let activeFilter = 'all';
+
+// ── Search ───────────────────────────────────────────────────────────────────
+async function runSearch() {
+  const mep   = document.getElementById("mepInput").value.trim();
+  const topic = document.getElementById("topicInput").value.trim();
+  if (!mep || !topic) { showError("Please fill in both fields."); return; }
+
+  setLoading(true);
+  document.getElementById("results").innerHTML = "";
+
+  try {
+    const res  = await fetch(`/api/search?mep=${enc(mep)}&topic=${enc(topic)}`);
+    const data = await res.json();
+    if (!res.ok) { showError(data.error || "Unknown error."); return; }
+    allVotes = data.votes;
+    activeFilter = 'all';
+    render(data);
+  } catch (e) {
+    showError("Cannot reach the server. Is app.py running?");
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function refreshData(e) {
+  e.preventDefault();
+  showState("⏳", "Refreshing…", "Re-downloading latest CSVs. This may take a minute.");
+  await fetch("/api/search?mep=_&topic=_&refresh=1").catch(() => {});
+  showState("✓", "Dataset refreshed", "You can now search with the latest data.");
+}
+
+// ── Render ───────────────────────────────────────────────────────────────────
+function render(data) {
+  const pct = k => data.percentages[k] || 0;
+
+  const warning = data.multiple
+    ? `<div class="warning">⚠ Multiple MEPs matched — showing <strong>${esc(data.mep_name)}</strong>. Others: ${data.all_matches.slice(1).map(esc).join(", ")}.</div>`
+    : "";
+
+  document.getElementById("results").innerHTML = `
+    ${warning}
+    <div class="result-header">
+      <div>
+        <div class="mep-name">${esc(data.mep_name)}</div>
+        <div class="result-meta">Topic: "${esc(data.topic)}"</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <div class="badge">${data.total} total votes</div>
+        ${data.main_total ? `<div class="badge" style="border-color:rgba(232,201,126,.5);background:rgba(232,201,126,.15)">${data.main_total} main votes</div>` : ""}
+      </div>
+    </div>
+
+    <div class="bars-section">
+      <div style="font-family:DM Mono,monospace;font-size:11px;color:var(--accent);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:18px;display:flex;align-items:center;gap:8px">
+        ★ Based on ${data.main_total > 0 ? data.main_total + " main (final resolution) votes" : data.total + " votes (no main vote data)"}
+        <span style="color:var(--text-dim);font-size:10px">${data.main_total > 0 ? "amendments excluded" : "is_main not available for this data"}</span>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label"><span class="dot" style="background:var(--green)"></span>For (+)</div>
+        <div class="bar-track"><div class="bar-fill for-color" id="bFor"></div></div>
+        <div class="bar-pct" style="color:var(--green)">${pct("FOR")}%</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label"><span class="dot" style="background:var(--red)"></span>Against (−)</div>
+        <div class="bar-track"><div class="bar-fill against-color" id="bAgainst"></div></div>
+        <div class="bar-pct" style="color:var(--red)">${pct("AGAINST")}%</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label"><span class="dot" style="background:var(--grey)"></span>Abstention</div>
+        <div class="bar-track"><div class="bar-fill abs-color" id="bAbs"></div></div>
+        <div class="bar-pct" style="color:var(--grey)">${pct("ABSTENTION")}%</div>
+      </div>
+      ${data.counts.DID_NOT_VOTE ? `
+      <div class="bar-row">
+        <div class="bar-label"><span class="dot" style="background:var(--border2)"></span>Did not vote</div>
+        <div class="bar-track"><div class="bar-fill dnv-color" id="bDnv"></div></div>
+        <div class="bar-pct" style="color:var(--text-dim)">${pct("DID_NOT_VOTE")}%</div>
+      </div>` : ""}
+    </div>
+
+    <div class="filter-bar" id="filterBar">
+      <button class="filter-btn f-all active" onclick="setFilter('all',this)">ALL</button>
+      <button class="filter-btn f-main"    onclick="setFilter('main',this)">★ MAIN VOTES</button>
+      <button class="filter-btn f-for"     onclick="setFilter('for',this)">FOR +</button>
+      <button class="filter-btn f-against" onclick="setFilter('against',this)">AGAINST −</button>
+      <button class="filter-btn f-abs"     onclick="setFilter('abs',this)">ABSTENTION</button>
+    </div>
+    <div class="count-summary" id="countSummary"></div>
+    <div class="vote-list" id="voteList"></div>
+  `;
+
+  animateBars(pct);
+  renderVotes();
+}
+
+function setFilter(f, btn) {
+  activeFilter = f;
+  document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  renderVotes();
+}
+
+function renderVotes() {
+  let filtered = allVotes;
+  if (activeFilter === 'main')    filtered = allVotes.filter(v => v.is_main);
+  if (activeFilter === 'for')     filtered = allVotes.filter(v => v.position === 'FOR');
+  if (activeFilter === 'against') filtered = allVotes.filter(v => v.position === 'AGAINST');
+  if (activeFilter === 'abs')     filtered = allVotes.filter(v => v.position === 'ABSTENTION');
+
+  document.getElementById("countSummary").textContent =
+    `Showing ${filtered.length} of ${allVotes.length} votes`;
+
+  document.getElementById("voteList").innerHTML = filtered.map(voteCard).join("");
+}
+
+function voteCard(v) {
+  // Position chip
+  const posMap = {
+    FOR: ["pos-for","For +"],
+    AGAINST: ["pos-against","Against −"],
+    ABSTENTION: ["pos-abs","Abstention"],
+    DID_NOT_VOTE: ["pos-dnv","Did not vote"],
+  };
+  const [posCls, posLabel] = posMap[v.position] || ["pos-abs", v.position];
+
+  // Chips row
+  let chips = "";
+  if (v.is_main)         chips += `<span class="chip chip-main">★ MAIN</span>`;
+  if (v.amendment_number) chips += `<span class="chip chip-amend">AM ${esc(v.amendment_number)}</span>`;
+  if (v.procedure_type)  chips += `<span class="chip chip-type">${esc(v.procedure_type)}</span>`;
+  if (v.result === "ADOPTED")  chips += `<span class="chip chip-adopted">ADOPTED</span>`;
+  if (v.result === "REJECTED") chips += `<span class="chip chip-rejected">REJECTED</span>`;
+  if (v.result === "LAPSED")   chips += `<span class="chip chip-lapsed">LAPSED</span>`;
+
+  // Detail fields
+  const fields = [
+    ["Reference",          v.reference],
+    ["Procedure",          v.procedure_reference],
+    ["Procedure title",    v.procedure_title],
+    ["Procedure stage",    v.procedure_stage ? v.procedure_stage.replace(/_/g," ") : null],
+    ["Amendment subject",  v.amendment_subject],
+    ["Amendment #",        v.amendment_number],
+    ["MEP's group",        v.group],
+    ["Result",             v.result],
+  ].filter(([,val]) => val);
+
+  const detailFieldsHTML = fields.length ? `
+    <div class="detail-grid">
+      ${fields.map(([lbl, val]) => `
+        <div class="detail-item">
+          <div class="detail-label">${lbl}</div>
+          <div class="detail-value">${esc(String(val))}</div>
+        </div>`).join("")}
+    </div>` : "";
+
+  // Description block
+  const descHTML = v.description ? `
+    <div class="detail-item" style="margin-bottom:14px">
+      <div class="detail-label">Description</div>
+      <div class="detail-value" style="color:var(--grey)">${esc(v.description)}</div>
+    </div>` : "";
+
+  // Parliament totals bar
+  let ptHTML = "";
+  if (v.parliament_total) {
+    const t = v.parliament_total;
+    const pFor  = v.parliament_for      != null ? (v.parliament_for      / t * 100).toFixed(1) : 0;
+    const pAga  = v.parliament_against  != null ? (v.parliament_against  / t * 100).toFixed(1) : 0;
+    const pAbs  = v.parliament_abstention != null ? (v.parliament_abstention / t * 100).toFixed(1) : 0;
+
+    ptHTML = `
+      <div class="parliament-totals">
+        <div class="pt-label">Parliament result (all MEPs)</div>
+        <div class="pt-bars">
+          ${ptRow("For",        pFor,  v.parliament_for,       "var(--green)")}
+          ${ptRow("Against",    pAga,  v.parliament_against,   "var(--red)")}
+          ${ptRow("Abstention", pAbs,  v.parliament_abstention,"var(--grey)")}
+        </div>
+      </div>`;
+  }
+
+  const hasDetail = fields.length || v.description || v.parliament_total;
+
+  return `
+    <div class="vote-card${v.is_main ? " is-main" : ""}">
+      <div class="vote-header" onclick="toggleCard(this)">
+        <div class="vote-date">${v.date || "—"}</div>
+        <div class="vote-title-wrap">
+          <div class="vote-title-text">${esc(v.title)}</div>
+          ${chips ? `<div class="vote-badges">${chips}</div>` : ""}
+        </div>
+        <div class="vote-right">
+          <span class="position-chip ${posCls}">${posLabel}</span>
+          ${hasDetail ? `<span class="expand-icon">▾</span>` : ""}
+        </div>
+      </div>
+      ${hasDetail ? `
+      <div class="vote-detail">
+        ${descHTML}
+        ${detailFieldsHTML}
+        ${ptHTML}
+      </div>` : ""}
+    </div>`;
+}
+
+function ptRow(label, pct, count, color) {
+  return `
+    <div class="pt-row">
+      <div class="pt-lbl">${label}</div>
+      <div class="pt-track"><div class="pt-fill" style="width:${pct}%;background:${color}"></div></div>
+      <div class="pt-val">${count != null ? count : "—"}</div>
+    </div>`;
+}
+
+function toggleCard(header) {
+  const card = header.closest(".vote-card");
+  card.classList.toggle("open");
+}
+
+function animateBars(pct) {
+  requestAnimationFrame(() => setTimeout(() => {
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.style.width = v + "%"; };
+    set("bFor",     pct("FOR"));
+    set("bAgainst", pct("AGAINST"));
+    set("bAbs",     pct("ABSTENTION"));
+    set("bDnv",     pct("DID_NOT_VOTE"));
+  }, 80));
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function showError(msg) {
+  document.getElementById("results").innerHTML = `
+    <div class="state-box error-box">
+      <div class="icon">⚠</div><h3>Something went wrong</h3><p>${msg}</p>
+    </div>`;
+}
+function showState(icon, title, msg) {
+  document.getElementById("results").innerHTML = `
+    <div class="state-box">
+      <div class="icon">${icon}</div><h3>${title}</h3><p>${msg}</p>
+    </div>`;
+}
+function setLoading(on) {
+  const btn = document.getElementById("searchBtn");
+  btn.disabled = on;
+  btn.classList.toggle("loading", on);
+}
+function enc(s) { return encodeURIComponent(s); }
+function esc(s) {
+  return String(s ?? "")
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// Enter key
+document.addEventListener("DOMContentLoaded", () => {
+  ["mepInput","topicInput"].forEach(id =>
+    document.getElementById(id).addEventListener("keydown", e => { if (e.key === "Enter") runSearch(); })
+  );
+});
+</script>
+</body>
+</html>
