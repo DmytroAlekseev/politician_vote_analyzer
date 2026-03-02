@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
 """
-MEP Vote Analyzer — Flask Backend v2
-Data source: HowTheyVote.eu CSV exports (GitHub releases)
-
-Run:
-    pip install flask requests pandas
-    python app.py
-
-Then open: http://localhost:5000
+MEP Vote Analyzer - Flask Backend v4
+Memory-optimised for Render free tier (512 MB RAM).
+Only main votes (final resolutions) are loaded - amendments are ignored.
 """
 
-import io
-import os
+import io, os
 from pathlib import Path
 
 import pandas as pd
@@ -28,80 +22,112 @@ URLS = {
     "groups":       f"{BASE}/groups.csv.gz",
 }
 
-# Only load columns we actually use — cuts memory by ~70%
-COLUMNS = {
-    "members":      ["id", "first_name", "last_name", "country_code"],
-    "votes":        ["id", "timestamp", "display_title", "description",
-                     "amendment_subject", "amendment_number", "is_main",
-                     "reference", "procedure_reference", "procedure_title",
-                     "procedure_type", "procedure_stage", "result",
-                     "count_for", "count_against", "count_abstention",
-                     "count_did_not_vote"],
-    "member_votes": ["vote_id", "member_id", "position", "group_code"],
-    "groups":       ["code", "short_label"],
-}
-
 CACHE_DIR = Path("cache")
+USE_DISK  = os.environ.get("RENDER") is None
 _data: dict = {}
-USE_DISK = os.environ.get("RENDER") is None  # local = disk cache; Render = memory only
 
 
-def _fetch(key: str, force: bool = False) -> pd.DataFrame:
-    wanted = COLUMNS[key]
+def _get_raw(key: str, force: bool = False) -> bytes:
     if USE_DISK:
         path = CACHE_DIR / f"{key}.csv.gz"
         if force and path.exists():
             path.unlink()
         if not path.exists():
             print(f"  Downloading {key}.csv.gz ...", flush=True)
-            r = requests.get(URLS[key], timeout=90, headers={"User-Agent": "MEP-Analyzer/2.0"})
+            r = requests.get(URLS[key], timeout=120, headers={"User-Agent": "MEP-Analyzer/4.0"})
             r.raise_for_status()
             path.write_bytes(r.content)
-            raw = r.content
         else:
-            print(f"  Cached      {key}.csv.gz", flush=True)
-            raw = path.read_bytes()
+            print(f"  Cached {key}.csv.gz", flush=True)
+        return path.read_bytes()
     else:
         print(f"  Downloading {key}.csv.gz ...", flush=True)
-        r = requests.get(URLS[key], timeout=90, headers={"User-Agent": "MEP-Analyzer/2.0"})
+        r = requests.get(URLS[key], timeout=120, headers={"User-Agent": "MEP-Analyzer/4.0"})
         r.raise_for_status()
-        raw = r.content
-
-    df = pd.read_csv(
-        io.BytesIO(raw),
-        compression="gzip",
-        low_memory=True,
-        usecols=lambda c: c.strip() in wanted,
-    )
-    df.columns = df.columns.str.strip()
-    # Convert low-cardinality strings to categoricals to save RAM
-    for col in df.select_dtypes("object").columns:
-        if df[col].nunique() < 1000:
-            df[col] = df[col].astype("category")
-    return df
+        return r.content
 
 
 def load_data(force: bool = False) -> None:
     global _data
     CACHE_DIR.mkdir(exist_ok=True)
-    print("\nLoading dataset ...")
+    print("\nLoading dataset ...", flush=True)
 
-    members      = _fetch("members", force)
-    votes        = _fetch("votes", force)
-    member_votes = _fetch("member_votes", force)
-    groups       = _fetch("groups", force)
+    # --- groups (tiny) ---
+    groups = pd.read_csv(
+        io.BytesIO(_get_raw("groups", force)),
+        compression="gzip", usecols=["code", "short_label"]
+    )
+    group_map = dict(zip(groups["code"].astype(str), groups["short_label"].astype(str)))
+    del groups
 
-    first = members.get("first_name", pd.Series("", index=members.index)).fillna("").astype(str)
-    last  = members.get("last_name",  pd.Series("", index=members.index)).fillna("").astype(str)
-    members["full_name"] = (first + " " + last).str.strip()
+    # --- members (small) ---
+    members = pd.read_csv(
+        io.BytesIO(_get_raw("members", force)),
+        compression="gzip", usecols=["id", "first_name", "last_name"]
+    )
+    members["id"] = pd.to_numeric(members["id"], errors="coerce").astype("Int32")
+    members["full_name"] = (
+        members["first_name"].fillna("").astype(str) + " " +
+        members["last_name"].fillna("").astype(str)
+    ).str.strip()
+    del members["first_name"], members["last_name"]
+    print(f"  {len(members):,} MEPs loaded", flush=True)
 
-    group_map = dict(zip(
-        groups["code"].astype(str),
-        groups.get("short_label", groups["code"]).astype(str)
-    ))
+    # --- votes: keep only main votes ---
+    votes_raw = _get_raw("votes", force)
+    all_votes = pd.read_csv(
+        io.BytesIO(votes_raw),
+        compression="gzip",
+        usecols=["id", "timestamp", "display_title", "description",
+                 "amendment_subject", "amendment_number", "is_main",
+                 "reference", "procedure_reference", "procedure_title",
+                 "procedure_type", "procedure_stage", "result",
+                 "count_for", "count_against", "count_abstention",
+                 "count_did_not_vote"],
+        low_memory=True
+    )
+    del votes_raw
+    # Keep only main votes — this is the key memory reduction
+    votes = all_votes[all_votes["is_main"] == True].copy()
+    del all_votes
+    votes["id"] = pd.to_numeric(votes["id"], errors="coerce").astype("Int32")
+    print(f"  {len(votes):,} main votes loaded (amendments discarded)", flush=True)
 
-    _data = {"members": members, "votes": votes, "member_votes": member_votes, "group_map": group_map}
-    print(f"  ok {len(members):,} MEPs | {len(votes):,} votes | {len(member_votes):,} individual votes\n")
+    # --- member_votes: only rows for main vote IDs ---
+    main_vote_ids = set(votes["id"].dropna().astype(int).tolist())
+    mv_raw = _get_raw("member_votes", force)
+
+    # Read in chunks and keep only rows matching main vote IDs
+    chunks = []
+    for chunk in pd.read_csv(
+        io.BytesIO(mv_raw),
+        compression="gzip",
+        usecols=["vote_id", "member_id", "position", "group_code"],
+        chunksize=200_000,
+        low_memory=True
+    ):
+        chunk["vote_id"]   = pd.to_numeric(chunk["vote_id"],   errors="coerce").astype("Int32")
+        chunk["member_id"] = pd.to_numeric(chunk["member_id"], errors="coerce").astype("Int32")
+        filtered = chunk[chunk["vote_id"].isin(main_vote_ids)]
+        if not filtered.empty:
+            chunks.append(filtered)
+    del mv_raw
+
+    member_votes = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame(
+        columns=["vote_id", "member_id", "position", "group_code"]
+    )
+    # Categorical for low-cardinality columns
+    member_votes["position"]   = member_votes["position"].astype("category")
+    member_votes["group_code"] = member_votes["group_code"].astype("category")
+    print(f"  {len(member_votes):,} individual votes kept (main votes only)", flush=True)
+
+    _data = {
+        "members":      members,
+        "votes":        votes,
+        "member_votes": member_votes,
+        "group_map":    group_map,
+    }
+    print("  Dataset ready.\n", flush=True)
 
 
 def safe(val):
@@ -128,8 +154,8 @@ def _ensure_loaded():
     if not _data:
         try:
             load_data()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"load_data error: {e}", flush=True)
 
 
 @app.route("/")
@@ -157,17 +183,18 @@ def search():
     member_votes = _data["member_votes"]
     group_map    = _data["group_map"]
 
-    q    = mep_query.lower()
-    mask = members["full_name"].str.lower().str.contains(q, na=False)
+    # 1. Find MEP
+    mask = members["full_name"].str.lower().str.contains(mep_query.lower(), na=False)
     hits = members[mask]
     if hits.empty:
         return jsonify({"error": f"No MEP found matching '{mep_query}'. Try a partial last name."}), 404
 
     mep         = hits.iloc[0]
     mep_id      = mep["id"]
-    mep_name    = mep["full_name"]
-    all_matches = hits["full_name"].tolist()
+    mep_name    = str(mep["full_name"])
+    all_matches = hits["full_name"].astype(str).tolist()
 
+    # 2. Find main votes matching topic
     tq        = topic_query.lower()
     title_col = "display_title" if "display_title" in votes.columns else "title"
 
@@ -181,8 +208,9 @@ def search():
     topic_votes = votes[combined].copy()
 
     if topic_votes.empty:
-        return jsonify({"error": f"No votes found matching topic '{topic_query}'."}), 404
+        return jsonify({"error": f"No main votes found for topic '{topic_query}'."}), 404
 
+    # 3. Get this MEP's positions on those votes
     vote_ids = set(topic_votes["id"].tolist())
     mep_mv   = member_votes[
         (member_votes["member_id"] == mep_id) &
@@ -190,8 +218,9 @@ def search():
     ].copy()
 
     if mep_mv.empty:
-        return jsonify({"error": f"{mep_name} has no recorded roll-call votes on '{topic_query}'."}), 404
+        return jsonify({"error": f"{mep_name} has no recorded votes on '{topic_query}'."}), 404
 
+    # 4. Merge metadata
     keep_cols = ["id", title_col, "timestamp", "description", "amendment_subject",
                  "amendment_number", "is_main", "reference", "procedure_reference",
                  "procedure_title", "procedure_type", "procedure_stage", "result",
@@ -199,18 +228,15 @@ def search():
     keep_cols = [c for c in keep_cols if c in topic_votes.columns]
     merged    = mep_mv.merge(topic_votes[keep_cols], left_on="vote_id", right_on="id", how="left")
 
-    main_counts = {"FOR": 0, "AGAINST": 0, "ABSTENTION": 0, "DID_NOT_VOTE": 0}
-    all_counts  = {"FOR": 0, "AGAINST": 0, "ABSTENTION": 0, "DID_NOT_VOTE": 0}
+    # 5. Build results
+    counts = {"FOR": 0, "AGAINST": 0, "ABSTENTION": 0, "DID_NOT_VOTE": 0}
     result_votes = []
 
     for _, row in merged.iterrows():
         pos = str(row.get("position", "")).strip().upper()
-        if pos not in all_counts:
+        if pos not in counts:
             pos = "ABSTENTION"
-        all_counts[pos] += 1
-        is_main = bool(row.get("is_main")) if safe(row.get("is_main")) is not None else False
-        if is_main:
-            main_counts[pos] += 1
+        counts[pos] += 1
 
         gc          = safe(row.get("group_code"))
         group_label = group_map.get(str(gc), str(gc)) if gc else None
@@ -227,7 +253,7 @@ def search():
             "description":         safe(row.get("description")),
             "amendment_subject":   safe(row.get("amendment_subject")),
             "amendment_number":    safe(row.get("amendment_number")),
-            "is_main":             is_main,
+            "is_main":             True,
             "reference":           safe(row.get("reference")),
             "procedure_reference": safe(row.get("procedure_reference")),
             "procedure_title":     safe(row.get("procedure_title")),
@@ -243,24 +269,20 @@ def search():
             "parliament_total":    sum(x for x in [cf, ca, cab, cdnv] if x is not None) or None,
         })
 
-    result_votes.sort(key=lambda v: (0 if v.get("is_main") else 1, str(v.get("timestamp") or "")), reverse=True)
-    result_votes.sort(key=lambda v: 0 if v.get("is_main") else 1)
+    # Newest first
+    result_votes.sort(key=lambda v: str(v.get("timestamp") or ""), reverse=True)
 
-    total          = len(result_votes)
-    main_total     = sum(main_counts.values())
-    counts_for_pct = main_counts if main_total > 0 else all_counts
-    total_for_pct  = main_total  if main_total > 0 else total
-
+    total = len(result_votes)
     return jsonify({
         "mep_name":     mep_name,
         "mep_id":       int(mep_id),
         "topic":        topic_query,
         "total":        total,
-        "main_total":   main_total,
-        "counts":       counts_for_pct,
-        "all_counts":   all_counts,
-        "percentages":  {k: round(v / total_for_pct * 100, 1) for k, v in counts_for_pct.items()},
-        "pct_based_on": "main" if main_total > 0 else "all",
+        "main_total":   total,
+        "counts":       counts,
+        "all_counts":   counts,
+        "percentages":  {k: round(v / total * 100, 1) for k, v in counts.items()},
+        "pct_based_on": "main",
         "votes":        result_votes,
         "all_matches":  all_matches,
         "multiple":     len(all_matches) > 1,
